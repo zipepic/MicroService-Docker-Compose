@@ -1,0 +1,28 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: "0.0.0.0:55680"
+
+exporters:
+  otlp:
+    endpoint: "host.docker.internal:4317"  # Отправка данных в Jaeger gRPC endpoint
+    tls:
+      insecure: true
+
+  logging:  # Экспортер для логирования трассировок (для отладки)
+    loglevel: debug
+
+processors:
+  batch:  # Процессор для батчирования данных перед отправкой
+  memory_limiter:  # Ограничение использования памяти
+    limit_mib: 400
+    spike_limit_mib: 100
+    check_interval: 5s
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch, memory_limiter]
+      exporters: [otlp, logging]

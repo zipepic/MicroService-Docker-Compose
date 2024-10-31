@@ -1,0 +1,253 @@
+version: '3'
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.1
+    container_name: elasticsearch-container
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - elastic-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9200/" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  redis:
+    image: redis
+    container_name: redis-container
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_PASSWORD=yourpassword
+    command: [ "redis-server", "--requirepass", "yourpassword" ]
+    volumes:
+      - redis-data:/data
+    networks:
+      - redis-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "yourpassword", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres
+    container_name: postgres-container
+    environment:
+      - POSTGRES_USER=postgres_user
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=postgres_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - postgres-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres_user" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.10.7-management
+    container_name: rabbitmq-container
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    ports:
+      - 15672:15672
+      - 5672:5672
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - rabbitmq-network
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "check_running" ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+  axon-server:
+    image: axoniq/axonserver
+    container_name: axon-server-container
+    ports:
+      - "8024:8024"
+      - "8124:8124"
+      - "8224:8224"
+    volumes:
+      - axon-server-data:/axoniq/data
+    networks:
+      - axon-server-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8024/actuator/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus-container
+    ports:
+      - 9090:9090
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - prometheus-network
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "http://localhost:9090/-/healthy" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana-container
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - 3000:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - grafana-network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "http://localhost:3000/-/healthy" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.10.1
+    container_name: logstash-container
+    volumes:
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro,Z
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro,Z
+    ports:
+      - 5044:5044
+      - 50000:50000/tcp
+      - 50000:50000/udp
+      - 9600:9600
+    environment:
+      LOGSTASH_INTERNAL_PASSWORD: yourpassword
+    networks:
+      - logstash-network
+    depends_on:
+      - elasticsearch
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9600/_node" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.10.1
+    container_name: kibana-container
+    volumes:
+      - ./kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml:ro,Z
+    ports:
+      - 5601:5601
+    environment:
+      KIBANA_SYSTEM_PASSWORD: yourpassword
+    networks:
+      - kibana-network
+    depends_on:
+      - elasticsearch
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5601/api/status" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-container
+    command: [ "--config=/etc/otel/config.yaml" ]
+    volumes:
+      - ./opentelemetry/otel-collector-config.yaml:/etc/otel/config.yaml
+    ports:
+#      - "4317:4317"  # OTLP gRPC
+      - "55680:55680"  # OTLP HTTP
+    networks:
+      - otel-network
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.36
+    container_name: jaeger-container
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "6831:6831/udp"  # Jaeger UDP for traces
+      - "6832:6832/udp"  # Jaeger UDP for traces (secondary)
+      - "5778:5778"      # Jaeger UI for service discovery
+      - "16686:16686"    # Jaeger UI for trace visualization
+      - "14268:14268"    # Jaeger HTTP collector
+      - "14250:14250"    # Jaeger gRPC collector (used by OTLP)
+      - "9411:9411"      # Zipkin compatibility
+      - "4317:4317" # OTLP gRPC receiver
+    networks:
+      - jaeger-network
+
+
+
+networks:
+  elastic-network:
+    driver: bridge
+  redis-network:
+    driver: bridge
+  postgres-network:
+    driver: bridge
+  rabbitmq-network:
+    driver: bridge
+  axon-server-network:
+    driver: bridge
+  prometheus-network:
+    driver: bridge
+  grafana-network:
+    driver: bridge
+  logstash-network:
+    driver: bridge
+  kibana-network:
+    driver: bridge
+  otel-network:
+    driver: bridge
+  jaeger-network:
+    driver: bridge
+
+volumes:
+  es-data:
+    driver: local
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
+  rabbitmq-data:
+    driver: local
+  axon-server-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
