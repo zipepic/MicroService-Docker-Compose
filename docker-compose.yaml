@@ -180,7 +180,7 @@ services:
       timeout: 10s
       retries: 3
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.110.0
     container_name: otel-container
     command: [ "--config=/etc/otel/config.yaml" ]
     volumes:
@@ -235,6 +235,9 @@ networks:
     driver: bridge
   jaeger-network:
     driver: bridge
+
+
+
 
 volumes:
   es-data:
